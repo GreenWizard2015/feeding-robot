@@ -4,23 +4,17 @@ from tensorflow.keras.utils import Sequence
 import os
 import json
 import random
+import joblib
 
-def makeGaussian(size, fwhm, center):
-  """ Make a square gaussian kernel.
-  size is the length of a side of the square
-  fwhm is full-width-half-maximum, which
-  can be thought of as an effective radius.
-  """
-  x = np.arange(0, size, 1, float)
+def gaussian(size, fwhm):
+  x = np.arange(0, size * 2, 1, float)
   y = x[:,np.newaxis]
-  
-  if center is None:
-    x0 = y0 = size // 2
-  else:
-    x0 = center[0]
-    y0 = center[1]
-  
-  return np.exp(-4*np.log(2) * ((x-x0)**2 + (y-y0)**2) / fwhm**2)
+  centralGaussian = np.exp(-4*np.log(2) * ((x-size)**2 + (y-size)**2) / fwhm**2)
+
+  def f(center):
+    dx, dy = np.subtract([size, size], center)
+    return centralGaussian[dy:dy+size, dx:dx+size]
+  return f
 
 class CBasicDataGenerator(Sequence):
   ANCHORS = ['UR', 'UY', 'UW', 'DB', 'DG', 'DW', 'B1', 'B2']
@@ -31,8 +25,18 @@ class CBasicDataGenerator(Sequence):
     self._dims = np.array(params['image size'])
     self._transformer = params['transformer']
     self._minAnchors = params['min anchors']
-    self._targetRadius = params['target radius']
     self._preprocess = params.get('preprocess', lambda x: x)
+    self._addFakeOutput = params.get('fake output', False)
+    self._gaussian = gaussian(
+      size=self._dims[0],
+      fwhm=params['target radius']
+    )
+    
+    self._executor = lambda x: list(x)
+    self._createSample = self._createSampleReal
+    if 1 < joblib.cpu_count():
+      self._executor = joblib.Parallel(n_jobs=-1, require='sharedmem')
+      self._createSample = joblib.delayed(self._createSampleReal)
     
     FOLDER = os.path.abspath(params['folder'])
     _file = lambda name: os.path.join(FOLDER, name)
@@ -62,47 +66,55 @@ class CBasicDataGenerator(Sequence):
   def _countVisible(self, points):
     return sum([1 for pt in points if self._visiblePoint(pt)])
   
+  def _createSampleReal(self, srcImage, points, X, Y, ind):
+    pointsMin = min((
+      self._minAnchors,
+      sum(1 for x, y in points if (0 <= x) and (0 <= y))
+    ))
+    while True:
+      transformed = self._transformer(srcImage, points)
+      if not transformed: continue
+      
+      img, pts = transformed
+      scales = (self._dims / np.array(img.shape[:2], np.float32))[::-1]
+      pts = [np.array(x) * scales for x in pts]
+      
+      if self._countVisible(pts) < pointsMin: continue
+      
+      noneClassMasks = np.ones((*self._dims, ), np.float32)
+      for i, pt in enumerate(pts):
+        mask = None
+        if self._visiblePoint(pt):
+          x, y = pt
+          mask = self._gaussian(center=(int(x), int(y)))
+          noneClassMasks -= mask
+        else:
+          mask = np.zeros_like(noneClassMasks)
+        
+        Y[ind, :, :, i] = mask
+      #######
+      Y[ind, :, :, -1] = noneClassMasks
+      X[ind] = self._preprocess(img)
+      break
+    return
+  
   def __getitem__(self, index):
     data = self._epochBatches[index]
     srcImage = cv2.imread(data['file'])
     points = data['points']
-    initPointsN = self._countVisible(points)
     
-    X = np.zeros((self._batchSize, *self._dims, 3), np.float32)
-    Y = np.zeros((self._batchSize, *self._dims, len(self.ANCHORS) + 1), np.float32)
-    resIndex = 0
-    while resIndex < self._batchSize:
-      transformed = self._transformer(srcImage.copy(), points)
-      if transformed:
-        img, pts = transformed
-        scales = (self._dims / np.array(img.shape[:2], np.float32))[::-1]
-        pts = [np.array(x) * scales for x in pts]
-        pts = [(pt if self._visiblePoint(pt) else (-1, -1)) for pt in pts]
-        
-        if self._countVisible(pts) < min((self._minAnchors, initPointsN)):
-          #print(data)
-          continue
-        
-        noneClassMasks = np.ones((*self._dims, ), np.float32)
-        for i, pt in enumerate(pts):
-          mask = None
-          if self._visiblePoint(pt):
-            x, y = pt
-            mask = makeGaussian(self._dims[0], fwhm=self._targetRadius, center=(int(x), int(y)))
-            noneClassMasks -= mask
-          else:
-            mask = np.zeros_like(noneClassMasks)
-          
-          Y[resIndex, :, :, i] = mask
-          #####
-        Y[resIndex, :, :, -1] = noneClassMasks
-        Y[resIndex] = np.clip(Y[resIndex],  a_min=0., a_max=1.)
-        
-        X[resIndex] = self._preprocess( cv2.resize(img, tuple(int(x) for x in self._dims) ) )
-        resIndex += 1
-      ###
+    X = np.empty((self._batchSize, *self._dims, 3), np.float32)
+    Y = np.empty((self._batchSize, *self._dims, len(self.ANCHORS) + 1), np.float32)
+    
+    self._executor(
+      self._createSample(srcImage, points, X, Y, ind) for ind in range(self._batchSize)
+    )
 
-    return (X, Y)  
+    Y[:, :, :, -1] = np.clip(Y[:, :, :, -1], a_min=0., a_max=1.)
+
+    if self._addFakeOutput:
+      Y = [Y, np.zeros((Y.shape[0] * 9, 1))]
+    return (X, Y)
   ###########################
   def _readPoints(self, data):
     res = []

@@ -38,32 +38,26 @@ def getROI(pts):
     xmin = ymin = xmax = ymax = 0
   return np.array((xmin, ymin)), np.array((xmax, ymax))
 
-def brightness_augment(img, factor=0.5): 
-  hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV) #convert to hsv
-  hsv = np.array(hsv, dtype=np.float64)
-  hsv[:, :, 2] = hsv[:, :, 2] * (factor + np.random.uniform()) #scale channel V uniformly
-  hsv[:, :, 2][hsv[:, :, 2] > 255] = 255 #reset out of range values
-  rgb = cv2.cvtColor(np.array(hsv, dtype=np.uint8), cv2.COLOR_HSV2BGR)
-  return rgb
+def brightness_augment(img, factor=0.5):
+  return cv2.addWeighted(img, 1. - factor, img, random.random(), random.random())
 
 def sampleAugmentations(
   paddingScale, rotateAngle,
   brightnessFactor=None, noiseRate=0,
-  showAugmented=False
+  showAugmented=False,
+  resize=None
 ):
   def apply(img, points):
-    if 0 < rotateAngle:
-      rotAngle = (random.random() - .5) * 2. * rotateAngle
-      M, HW = rotate_bound(img, rotAngle)
-      img = cv2.warpAffine(img, M, HW)
-      
-      newPoints = np.array([ x[0] for x in cv2.transform(np.array([ [x] for x in points ]), M) ])
-      pts = np.array(points)
-      for i, pt in enumerate(points):
-        if 0 <= pt[0]:
-          pts[i] = newPoints[i]
-      points = pts
-      ##
+    rotAngle = (random.random() - .5) * 2. * rotateAngle
+    transM, HW = rotate_bound(img, rotAngle)
+    
+    newPoints = np.array([ x[0] for x in cv2.transform(np.array([ [x] for x in points ]), transM) ])
+    pts = np.array(points)
+    for i, pt in enumerate(points):
+      if 0 <= pt[0]:
+        pts[i] = newPoints[i]
+    points = pts
+    ##
     a, b = getROI(points)
     if (b - a).min() < 16:
       return False
@@ -73,20 +67,39 @@ def sampleAugmentations(
     a = middle + (a - middle) * padding
     b = middle + (b - middle) * padding
     
-    maxHW = np.array(img.shape[:2])[::-1]
+    maxHW = np.array(HW)#[::-1]
     a = np.clip(a, a_min=0, a_max=maxHW)
     b = np.clip(b, a_min=0, a_max=maxHW)
     
-    if (b - a).min() < 16: return False
+    newSize = b - a
+    if newSize.min() < 16: return False
     points = [ np.array(x) - a for x in points ]
-    img = img[int(a[1]):int(b[1])+1, int(a[0]):int(b[0])+1]
+    
+    cX, cY = -a
+    transM = np.matmul(
+      np.array([[1, 0, cX],[0, 1, cY], [0, 0, 1]]),
+      np.vstack([transM, [0,0,1]])
+    ).astype(np.float32)[:2]
+    
+    if not(resize is None):
+      scales = np.divide(resize, newSize)[::-1]
+      points = [np.array(x) * scales for x in points]
+      transM = np.matmul(
+        np.array([[scales[0], 0, 0],[0, scales[1], 0], [0, 0, 1]]),
+        np.vstack([transM, [0,0,1]])
+      ).astype(np.float32)[:2]
+      newSize = np.array(resize)
+
+    img = cv2.warpAffine(img, transM[:2], tuple(newSize.astype(np.uint16)), flags=cv2.INTER_NEAREST)
     
     if not (brightnessFactor is None):
       img = brightness_augment(img, factor=brightnessFactor)
     
     if 0 < noiseRate:
-      noise = (1. - noiseRate) < np.random.random_sample(size=img.shape[:2])
-      img[noise] *= 0
+      ptsN = int(noiseRate * img.shape[0] * img.shape[1] * (0.1 + 0.9 * random.random()))
+      noiseX = np.random.choice(np.arange(img.shape[0]), size=(ptsN,), replace=True)
+      noiseY = np.random.choice(np.arange(img.shape[1]), size=(ptsN,), replace=True)
+      img[noiseX, noiseY, :] = 0
 
     if showAugmented:
       cv2.imshow('augmented', img)

@@ -9,6 +9,10 @@ if 'COLAB_GPU' not in os.environ: # local GPU
     gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3 * 1024)]
   )
 
+import numpy as np
+import detectorDiscriminator
+import time
+
 import tensorflow.keras as keras
 import tensorflow.keras.backend as K
 from CAnchorsDetector import CAnchorsDetector
@@ -69,88 +73,116 @@ def complex_loss():
   
   return calc
 
+###################
+def advLoss(scale):
+  def calc(_, discriminatorRate):
+    return tf.reduce_mean(1. - discriminatorRate) * scale
+  return calc
+
+def flattenSamples(x):
+  x = x[:, :, :, :-1]
+  return K.reshape(
+    K.permute_dimensions(x, (0, 3, 1, 2)),
+    (-1, K.int_shape(x)[1], K.int_shape(x)[2], 1)
+  )
+  
+def makeTrainer(mainModel, discriminator):
+  mainInput = keras.layers.Input(shape=mainModel.input_shape[1:])
+  rateScale = tf.Variable(0.0)
+  
+  predicted = mainModel(mainInput)
+  discriminatorRate = discriminator(
+    keras.layers.Lambda(flattenSamples)(predicted)
+  )
+
+  model = keras.Model(inputs=[mainInput], outputs=[predicted, discriminatorRate])
+  model.compile(
+    optimizer=keras.optimizers.Adam(lr=1e-4, clipnorm=1.),
+    loss=[complex_loss(), advLoss(rateScale)]
+  )
+  return model, rateScale
+
+###################
+discriminator = detectorDiscriminator.CDetectorDiscriminator(
+  size=(224, 224),
+  samplesPreprocessor=lambda x: K.eval(flattenSamples(x)),
+  historySize=1024,
+  probBase=2 # probabilities: 0 = x, 1 = 1/2, 2 = 1/4, ..., up to 1/2^BATCH_SIZE
+)
+discriminator.network.summary()
+#####
 BATCH_SIZE = 16
 TRAIN_EPOCHS = 32
-TEST_EPOCHS = 8
+DISCRIMINATOR_EPOCHS = 32
 
 model = CAnchorsDetector()
-model.network.compile(
-  optimizer=keras.optimizers.Adam(lr=0.001, clipnorm=1.),
-  loss=complex_loss(),
-  metrics=[]
-)
 model.network.summary()
+
+trainer, advLossPower = makeTrainer(model.network, discriminator.network)
+trainer.summary()
+
 folder = lambda x: os.path.join(os.path.dirname(__file__), x)
 
-trainGenerator = CBasicDataGenerator({
-  'folder': folder('dataset/train'),
+COMMON_GENERATOR_SETTINGS = {
+  'min anchors': 0,
   'batch size': BATCH_SIZE,
-  'batches per epoch': TRAIN_EPOCHS,
   'image size': (224, 224),
-  'min anchors': 2,
   'target radius': 10,
+  'fake output': True,
+  'preprocess': model.preprocess,
+}
+
+trainGenerator = CBasicDataGenerator({
+  **COMMON_GENERATOR_SETTINGS,
+  'folder': folder('dataset/train'),
+  'batches per epoch': TRAIN_EPOCHS,
   'transformer': sampleAugmentations(
     paddingScale=5.,
     rotateAngle=120.,
     brightnessFactor=.5,
-    noiseRate=0.05
+    noiseRate=0.05,
+    resize=(224, 224)
   ),
-  'preprocess': model.preprocess
 })
 
-validGenerator = CBasicDataGenerator({
+discriminatorGenerator = CBasicDataGenerator({
+  **COMMON_GENERATOR_SETTINGS,
   'folder': folder('dataset/validation'),
-  'batch size': BATCH_SIZE,
-  'batches per epoch': TEST_EPOCHS,
-  'image size': (224, 224),
-  'min anchors': 1,
-  'target radius': 10,
+  'batches per epoch': DISCRIMINATOR_EPOCHS,
   'transformer': sampleAugmentations(
     paddingScale=3.,
     rotateAngle=50.,
     brightnessFactor=.5,
-    noiseRate=0.01
+    noiseRate=0.01,
+    resize=(224, 224)
   ),
-  'preprocess': model.preprocess
 })
 
 # create folder for weights
-os.makedirs(
-  os.path.dirname(model.weights_file()),
-  exist_ok=True
-)
+os.makedirs(os.path.dirname(model.weights_file('')), exist_ok=True)
 
-model.network.fit(
-  x=trainGenerator,
-  validation_data=validGenerator,
-  verbose=2,
-  callbacks=[
-    keras.callbacks.EarlyStopping(
-      monitor='val_loss', mode='min',
-      patience=500
-    ),
-    # best by validation loss
-    keras.callbacks.ModelCheckpoint(
-      filepath=model.weights_file('best'),
-      save_weights_only=True,
-      save_best_only=True,
-      monitor='val_loss',
-      mode='min',
-      verbose=1
-    ),
-    # best by train loss
-    keras.callbacks.ModelCheckpoint(
-      filepath=model.weights_file('latest'),
-      save_weights_only=True,
-      save_best_only=True,
-      monitor='loss',
-      mode='min',
-      verbose=1
-    ),
-    keras.callbacks.ReduceLROnPlateau(
-      monitor='val_loss', factor=0.9,
-      patience=50
-    )
-  ],
-  epochs=1000000 # we use EarlyStopping, so just a big number
-)
+totalEpochs = 0
+lastMaxLoss = 0.0
+for i in range(1, 100):
+  print('Super epoch %d.' % i)
+  
+  model.network.trainable = False
+  DAcc = discriminator.train(
+    discriminatorGenerator, model.network,
+    epochs=50, minEpochs=5, minAcc=.95
+  )
+  model.network.trainable = True
+
+  advLossPower.assign(lastMaxLoss * 0.5 * DAcc)
+  history = trainer.fit(
+    x=trainGenerator,
+    verbose=2,
+    callbacks=[
+      keras.callbacks.EarlyStopping(monitor='D_loss', mode='min', patience=10)
+    ],
+    epochs=5 * i
+  ).history
+  
+  lastMaxLoss = np.max(history['ADet_loss'])
+  totalEpochs += len(history['loss'])
+  model.network.save_weights(model.weights_file('%d' % totalEpochs))

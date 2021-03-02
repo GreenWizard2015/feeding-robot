@@ -26,7 +26,8 @@ gen = CBasicDataGenerator({
     paddingScale=5.,
     rotateAngle=60.,
     brightnessFactor=.5,
-    noiseRate=0.05
+    noiseRate=0.05,
+    resize=(224, 224)
   ),
   'preprocess': detector.preprocess
 })
@@ -40,20 +41,20 @@ while True:
     images[0] = img
     
     pred = detector.network.predict(np.array([img]))[0]
+    errors = []
     for i in range(8):
       mask = np.zeros((224, 224, 3))
       mask[:, :, 2] = masks[:, :, i]
       
       correctPos = center_of_mass(masks[:, :, i]) if np.any(0 < masks[:, :, i]) else np.array([0, 0])
       predPos = np.array([0, 0])
+      mask[:, :, 1] = pred[:, :, i] * 255.
       if np.any(.05 < pred[:, :, i]):
-        mask[:, :, 1] = pred[:, :, i] * 255.
         predPos = center_of_mass(pred[:, :, i])
         
         anchor = tuple(int(x) for x in predPos[::-1])
         color = (255, 0, 0)
         cv2.circle(mask, anchor, 8, color, 2)
-        
       else:
         cv2.putText(mask, 'Low value', (20, 20), cv2.FONT_HERSHEY_COMPLEX, .7, (255, 0, 0))
       
@@ -62,6 +63,7 @@ while True:
         d = np.sqrt((np.subtract(correctPos, predPos) ** 2).sum())
         if 0 < d:
           cv2.putText(mask, 'error = %.1fpx' % d, (20, 210), cv2.FONT_HERSHEY_COMPLEX, .5, (0, 0, 255))
+          errors.append(d)
       images.append(mask)
     
     rows = ceil(len(images) / IMAGE_PER_ROW)
@@ -75,5 +77,10 @@ while True:
         Y = 2 + (224 + 4) * row
         output[Y:Y+224, X:X+224] = img
 
+    cv2.putText(
+      output, 
+      'Mean error: %.1fpx. Std: %.1f' % (np.mean(errors), np.std(errors)), 
+      (230, 25), cv2.FONT_HERSHEY_COMPLEX, .75, (0, 0, 255)
+    )
     cv2.imshow('src', output)
     if 27 == cv2.waitKey(0): exit()

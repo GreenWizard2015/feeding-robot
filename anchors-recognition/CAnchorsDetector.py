@@ -43,16 +43,19 @@ def anchorsDetectorModel(size, anchors):
 
   return keras.Model(
     inputs=inputs,
-    outputs=layers.Conv2D(1 + anchors, 1, activation='softmax', padding='same')(res)
+    outputs=layers.Conv2D(1 + anchors, 1, activation='softmax', padding='same')(res),
+    name='ADet'
   )
   
 class CAnchorsDetector:
-  def __init__(self, size=(224, 224), anchors=8, minProbability=.1):
+  def __init__(self, size=(224, 224), anchors=8, minProbability=.1, weights=None):
     self._size = np.array(size)
     self._minProbability = minProbability
     self._anchors = anchors
     self._model = anchorsDetectorModel(size, anchors)
     self._pointRadius = 10
+    if weights:
+      self.load(*weights)
     return
   
   def preprocess(self, img):
@@ -65,11 +68,14 @@ class CAnchorsDetector:
   def network(self):
     return self._model
   
-  def weights_file(self, kind):
-    return os.path.join(os.path.dirname(__file__), 'anchors-detector-%s.h5' % kind)
+  def weights_file(self, kind, folder=None):
+    return os.path.join(
+      os.path.dirname(__file__) if folder is None else folder,
+      'anchors-detector-%s.h5' % kind
+    )
   
-  def load(self, kind=''):
-    return self._model.load_weights(self.weights_file(kind)) 
+  def load(self, kind='', folder=None):
+    return self._model.load_weights(self.weights_file(kind, folder)) 
 
   def _decodePrediction(self, prediction, image, returnProbabilities):
     res = [None for _ in range(self._anchors)]
