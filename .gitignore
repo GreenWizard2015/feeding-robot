@@ -7,3 +7,5 @@ __pycache__
 /anchors-recognition/dataset/
 /anchors-recognition/webcam/
 *.h5
+/anchors-recognition/debug
+/anchors-recognition/cache
