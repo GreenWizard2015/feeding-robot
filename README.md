@@ -1,23 +1,26 @@
 # Feeding Robot
 
-Основная мотивация проекта:
+> I started this project when I had very little experience in ML. I didn't know much and made a number of silly mistakes. The project provided me with a lot of experience and insights that helped me in other tasks. This project has been dormant for a while, and I am unlikely to continue working on this specific code. However, I am determined to implement the project someday. Please also note that this is a rough translation into English.
+> [Video](https://www.youtube.com/watch?v=qfuOcrQkL3o)
 
-> Множество людей больны теми или иными опорно-двигательными заболеваниями, которые делают невозможным/проблематичным самостоятельный приём пищи. Необходимость помощи в данном процессе создаёт множество сопутствующих проблем и вредит ментальному здоровью человека.
+Main project motivation:
+
+> Many people suffer from various musculoskeletal disorders that make independent feeding problematic or impossible. The need for assistance in this process creates many associated problems and can negatively impact a person's mental health.
 >
-> Существующие решения являются малодоступными, громоздкими или сложными в эксплуатации. Простые же роботы-манипуляторы и видео-камеры являются относительно недорогими и компактными, поэтому было решено создать ПО для них.
+> Existing solutions are often inaccessible, cumbersome, or difficult to operate. On the other hand, simple robotic manipulators and web cameras are relatively affordable and compact, so it was decided to create software for them.
 >
-> В идеале, решение должно относительно легко калиброваться под широкий спектр бюджетных видео-камер и манипуляторов на базе Arduino. Допускается наличие этапа калибровки системы перед началом процесса кормления. Установка системы и калибровка должна быть максимально простой и не требовать специальных навыков.
+> Ideally, the solution should be relatively easy to calibrate for a wide range of budget-friendly web cameras and Arduino-based manipulators. A calibration step for the system before the feeding process is acceptable. The installation and calibration of the system should be straightforward and not require special skills.
 
-Для начала работы над проектом, был приобретён [робот-манипулятор](https://bitkit.com.ua/ru/konstruktor-robot-manipulyator-robit) и вебкамера. Данный манипулятор, естественно, непригоден для реальной эксплуатации и будет, в последствии, заменён, но для тестов сгодится.
+To begin the project, a robotic manipulator and a webcam were purchased. This manipulator is not suitable for real operation and will be replaced later, but it will suffice for testing purposes.
 
-Чтоб упростить процесс распознавания, было нанесено 8 меток на робота.
+To simplify the recognition process, 8 markers were placed on the robot.
 
-![](images\robot.jpg)
+![Robot Image](images/robot.jpg)
 
-Приблизительный план разработки:
+Approximate development plan:
 
-- Базовое распознавание меток.
-- Реконструкция положения робота в пространстве.
-- Базовое управление роботом. Перемещение манипулятора в заданную точку пространства.
-- Распознавание рта.
-- Распознавание и реконструкция окружения робота, поиск тарелки и преград.
+- Basic marker recognition.
+- Reconstruction of the robot's position in space.
+- Basic control of the robot. Moving the manipulator to a specified point in space.
+- Mouth recognition.
+- Recognition and reconstruction of the robot's surroundings, searching for plates and obstacles.
